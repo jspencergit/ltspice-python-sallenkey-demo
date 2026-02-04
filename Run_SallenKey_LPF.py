@@ -2,8 +2,7 @@
 # Enhanced: User-configurable fc/Q, E96 rounding, unequal R1/R2
 # Dual simulation: AC for Bode + Transient for step response
 # Added: Step response analysis - % overshoot, rise time (10-90%), settling time (±2%)
-# Annotations on step plot + metrics text box
-# Logs all key info to log.txt
+# Annotations on step plot + metrics text box with improved placement to avoid overlap
 
 from PyLTSpice import SimCommander
 import ltspice
@@ -20,7 +19,7 @@ from datetime import datetime
 matplotlib.use('TkAgg')
 
 # -------------------------- User Configuration --------------------------
-TARGET_FC = 50000         # Desired 3 dB cutoff frequency in Hz
+TARGET_FC = 1000000         # Desired 3 dB cutoff frequency in Hz
 TARGET_Q  = 0.707         # Desired Q factor (0.707 ≈ Butterworth)
 PREFERRED_R_AVG = 10000   # Target average resistor value ~ this (Ohms) - guides scaling
 STEP_DELAY = 100e-6       # Initial delay before step (seconds) - 100 µs
@@ -218,9 +217,9 @@ print(f"Log saved to {LOG_FILE}")
 
 # -------------------------- Plotting --------------------------
 fig = plt.figure(figsize=(12, 16))
-gs = fig.add_gridspec(3, 1, height_ratios=[3, 3, 1])
+gs = fig.add_gridspec(3, 1, height_ratios=[3, 4, 1])  # Extra height for step plot annotations
 
-# Bode plot
+# Bode plot (unchanged)
 ax_bode = fig.add_subplot(gs[0, 0])
 ax_phase = ax_bode.twinx()
 ax_bode.semilogx(freq, mag_sim, label='Simulated Mag', color='blue')
@@ -238,7 +237,7 @@ lines1, labels1 = ax_bode.get_legend_handles_labels()
 lines2, labels2 = ax_phase.get_legend_handles_labels()
 ax_bode.legend(lines1 + lines2, labels1 + labels2, loc='lower left')
 
-# Step response with annotations
+# Step response with improved annotation placement
 ax_step = fig.add_subplot(gs[1, 0])
 ax_step.plot(time*1e6, vin_tran, label='Vin (step)', color='gray', linestyle='--', linewidth=1.5)
 ax_step.plot(time*1e6, vout_tran, label='Vout', color='blue', linewidth=2)
@@ -248,7 +247,12 @@ ax_step.set_ylabel('Voltage (V)')
 ax_step.set_title(f'Step Response (Actual Q = {actual_Q:.3f}, Target Q = {TARGET_Q:.3f})')
 ax_step.legend(loc='lower right')
 
-# Metrics text box
+# Auto ylim with padding for annotation space
+y_min = min(vout_tran.min(), vin_tran.min()) - 0.15
+y_max = max(vout_tran.max(), vin_tran.max()) + 0.15
+ax_step.set_ylim(y_min, y_max)
+
+# Metrics text box (moved slightly lower to avoid title overlap)
 metrics_text = (
     f"Target fc: {TARGET_FC/1000:.1f} kHz\n"
     f"Actual fc: {actual_fc/1000:.1f} kHz\n"
@@ -258,31 +262,38 @@ metrics_text = (
     f"Rise Time (10-90%): {rise_time_us:.2f} µs\n"
     f"Settling Time (±{SETTLING_TOLERANCE*100:.1f}%): {settling_time_us:.2f} µs"
 )
-ax_step.text(0.02, 0.98, metrics_text, transform=ax_step.transAxes, fontsize=10,
+ax_step.text(0.7, 0.5, metrics_text, transform=ax_step.transAxes, fontsize=10,
             verticalalignment='top', bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.8))
 
-# Overshoot annotation
-if overshoot_percent > 0.1:
-    ax_step.annotate('', xy=(time[peak_idx]*1e6, peak_value), xytext=(time[peak_idx]*1e6, final_value),
-                     arrowprops=dict(arrowstyle='<->', color='red', lw=1.5))
-    ax_step.text(time[peak_idx]*1e6 + 2, (peak_value + final_value)/2, f'{overshoot_percent:.2f}%',
-                 color='red', fontsize=10, fontweight='bold')
+# Overshoot annotation - local to peak, text offset right with bbox
+if overshoot_percent > 0.5:  # Only if meaningful
+    ax_step.annotate('', xy=(time[peak_idx]*1e6, final_value), xytext=(time[peak_idx]*1e6, peak_value),
+                     arrowprops=dict(arrowstyle='<->', color='red', lw=2))
+    ax_step.text(time[peak_idx]*1e6 + 8, (peak_value + final_value)/2, f'{overshoot_percent:.2f}%',
+                 color='red', fontsize=11, fontweight='bold', ha='left', va='center',
+                 bbox=dict(facecolor='white', alpha=0.7, edgecolor='red'))
 
-# Rise time annotation
+# Rise time annotation - vertical bracket on rising edge, text offset right
+mid_rise_y = final_value * 0.5
 ax_step.hlines([final_value*0.1, final_value*0.9], time[rise_low_idx]*1e6, time[rise_high_idx]*1e6,
-               color='green', linestyle='--')
-ax_step.annotate('', xy=(time[rise_low_idx]*1e6, final_value*0.2), xytext=(time[rise_high_idx]*1e6, final_value*0.2),
-                 arrowprops=dict(arrowstyle='<->', color='green', lw=1.5))
-ax_step.text((time[rise_low_idx] + time[rise_high_idx])*0.5e6, final_value*0.3, f'Rise: {rise_time_us:.2f} µs',
-             color='green', fontsize=10, ha='center')
+               color='green', linestyle='--', lw=1.5)
+ax_step.annotate('', xy=(time[rise_low_idx]*1e6, final_value*0.1), xytext=(time[rise_low_idx]*1e6, final_value*0.9),
+                 arrowprops=dict(arrowstyle='<->', color='green', lw=2))
+ax_step.text(time[rise_high_idx]*1e6 + 5, mid_rise_y, f'Rise: {rise_time_us:.2f} µs',
+             color='green', fontsize=11, ha='left', va='center',
+             bbox=dict(facecolor='white', alpha=0.7, edgecolor='green'))
 
-# Settling band and time annotation
-ax_step.axhspan(settle_band_low, settle_band_high, color='cyan', alpha=0.2)
-if settling_time_us > 0:
-    ax_step.annotate('', xy=(time[settle_start_idx]*1e6, final_value*0.1), xytext=(time[step_idx]*1e6, final_value*0.1),
-                     arrowprops=dict(arrowstyle='<->', color='purple', lw=1.5))
-    ax_step.text(time[step_idx]*1e6 + settling_time_us/2, final_value*0.05, f'Settling: {settling_time_us:.2f} µs',
-                 color='purple', fontsize=10, ha='center')
+# Settling time annotation - arrow at bottom, text above it on the right side
+settle_y = y_min + 0.05 * (y_max - y_min)  # Near bottom with space
+ax_step.annotate('', xy=(time[step_idx]*1e6, settle_y), xytext=(time[settle_start_idx]*1e6, settle_y),
+                 arrowprops=dict(arrowstyle='<->', color='purple', lw=2))
+ax_step.text((time[step_idx] + time[settle_start_idx])*0.5e6, settle_y + 0.08*(y_max - y_min),
+             f'Settling (±{SETTLING_TOLERANCE*100:.0f}%): {settling_time_us:.2f} µs',
+             color='purple', fontsize=11, ha='center', va='bottom',
+             bbox=dict(facecolor='white', alpha=0.7, edgecolor='purple'))
+
+# Settling band (light shaded)
+ax_step.axhspan(settle_band_low, settle_band_high, color='cyan', alpha=0.15)
 
 # Schematic
 ax_sch = fig.add_subplot(gs[2, 0])
